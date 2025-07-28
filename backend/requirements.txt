@@ -1,4 +1,9 @@
 Flask
 Flask-SocketIO
+psycopg2-binary
+SQLAlchemy
+gunicorn
 python-engineio
 python-socketio
+gevent 
+geventwebsocket
