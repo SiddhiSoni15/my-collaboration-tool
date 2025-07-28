@@ -2,8 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 
 // The URL of your Python Flask-SocketIO backend
-// Make sure this matches the host and port your backend is running on.
-const SOCKET_SERVER_URL = 'https://my-collaboration-tool.onrender.com';
+// IMPORTANT: Replace this with your deployed Render Service URL
+const SOCKET_SERVER_URL = 'https://my-collaboration-tool.onrender.com'; // e.g., 'https://realtime-chat-backend.onrender.com'
 
 // Main App component
 const App = () => {
@@ -11,8 +11,12 @@ const App = () => {
   const [messages, setMessages] = useState([]);
   // State to store the current message being typed in the input field
   const [messageInput, setMessageInput] = useState('');
-  // State to store the user's name
+  // State to store the user's name (initially empty)
   const [username, setUsername] = useState('');
+  // State to temporarily hold the username being typed before it's "set"
+  const [tempUsername, setTempUsername] = useState('');
+  // State to track if the username has been confirmed/set
+  const [usernameSet, setUsernameSet] = useState(false);
   // Ref to keep track of the socket connection
   const socketRef = useRef(null);
   // Ref for auto-scrolling the chat window to the bottom
@@ -20,19 +24,22 @@ const App = () => {
 
   // useEffect hook to handle Socket.IO connection and events
   useEffect(() => {
+    // Only connect to Socket.IO if the username has been set
+    if (!usernameSet) {
+      return;
+    }
+
     // Initialize the socket connection
-    // 'transports': ['websocket'] ensures WebSocket is preferred
     socketRef.current = io(SOCKET_SERVER_URL, {
       transports: ['websocket'],
-      // Add a small delay for reconnection attempts
       reconnectionDelayMax: 10000,
     });
 
     // Event listener for successful connection
     socketRef.current.on('connect', () => {
       console.log('Connected to Socket.IO server!');
-      // You can emit a 'user_joined' event here if you want to notify others
-      // socketRef.current.emit('user_joined', { username: username });
+      // Emit a user_joined event with the set username
+      socketRef.current.emit('user_joined', { username: username });
     });
 
     // Event listener for disconnection
@@ -43,19 +50,15 @@ const App = () => {
     // Event listener for initial messages received upon connection
     socketRef.current.on('initial_messages', (data) => {
       console.log('Received initial messages:', data.messages);
-      // Sort messages by timestamp to ensure correct order
       const sortedMessages = data.messages.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
       setMessages(sortedMessages);
-      // Scroll to the bottom after setting initial messages
       scrollToBottom();
     });
 
     // Event listener for new messages received in real-time
     socketRef.current.on('new_message', (message) => {
       console.log('Received new message:', message);
-      // Add the new message to the existing list
       setMessages((prevMessages) => [...prevMessages, message]);
-      // Scroll to the bottom after adding a new message
       scrollToBottom();
     });
 
@@ -65,7 +68,7 @@ const App = () => {
         socketRef.current.disconnect();
       }
     };
-  }, []); // Empty dependency array means this effect runs only once on mount
+  }, [usernameSet, username]); // Re-run effect when usernameSet or username changes
 
   // useEffect to scroll to the bottom whenever messages update
   useEffect(() => {
@@ -75,6 +78,17 @@ const App = () => {
   // Function to scroll the messages container to the bottom
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  // Function to handle setting the username
+  const handleSetUsername = (e) => {
+    e.preventDefault();
+    if (tempUsername.trim()) {
+      setUsername(tempUsername.trim());
+      setUsernameSet(true);
+    } else {
+      alert('Username cannot be empty.');
+    }
   };
 
   // Function to handle sending a message
@@ -88,10 +102,8 @@ const App = () => {
       // Emit the 'message' event to the server
       socketRef.current.emit('message', messageData);
       setMessageInput(''); // Clear the input field after sending
-    } else if (!username.trim()) {
-      alert('Please enter your username before sending a message.'); // Use alert for simplicity, but a custom modal is better
     } else if (!messageInput.trim()) {
-      alert('Message cannot be empty.'); // Use alert for simplicity, but a custom modal is better
+      alert('Message cannot be empty.');
     }
   };
 
@@ -99,7 +111,6 @@ const App = () => {
   const formatTimestamp = (timestamp) => {
     try {
       const date = new Date(timestamp);
-      // Check if the date is valid before formatting
       if (isNaN(date.getTime())) {
         return "Invalid Date";
       }
@@ -118,16 +129,30 @@ const App = () => {
           Real-time Collaboration Chat
         </div>
 
-        {/* Username Input */}
-        {!username && (
-          <div className="p-4 bg-blue-50 border-b border-blue-200">
-            <input
-              type="text"
-              placeholder="Enter your username..."
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              className="w-full p-3 border border-blue-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition duration-200 ease-in-out"
-            />
+        {/* Username Input / Display */}
+        {!usernameSet ? (
+          <form onSubmit={handleSetUsername} className="p-4 bg-blue-50 border-b border-blue-200">
+            <div className="flex space-x-3">
+              <input
+                type="text"
+                placeholder="Enter your username..."
+                value={tempUsername}
+                onChange={(e) => setTempUsername(e.target.value)}
+                className="flex-1 p-3 border border-blue-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition duration-200 ease-in-out"
+                maxLength={20} // Optional: Add a max length for username
+              />
+              <button
+                type="submit"
+                className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg shadow-md transition duration-300 ease-in-out transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={!tempUsername.trim()}
+              >
+                Set Username
+              </button>
+            </div>
+          </form>
+        ) : (
+          <div className="p-3 bg-blue-100 border-b border-blue-200 text-center text-blue-800 font-medium">
+            Logged in as: <span className="font-bold">{username}</span>
           </div>
         )}
 
@@ -135,7 +160,7 @@ const App = () => {
         <div className="flex-1 p-4 overflow-y-auto custom-scrollbar">
           {messages.length === 0 ? (
             <div className="text-center text-gray-500 mt-10">
-              No messages yet. Start the conversation!
+              {usernameSet ? "No messages yet. Start the conversation!" : "Please set your username to start chatting."}
             </div>
           ) : (
             messages.map((msg, index) => (
@@ -172,24 +197,20 @@ const App = () => {
               type="text"
               value={messageInput}
               onChange={(e) => setMessageInput(e.target.value)}
-              placeholder={username ? "Type your message..." : "Enter username first..."}
+              placeholder={usernameSet ? "Type your message..." : "Set username first to chat..."}
               className="flex-1 p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition duration-200 ease-in-out"
-              disabled={!username}
+              disabled={!usernameSet} // Disable chat input until username is set
             />
             <button
               type="submit"
               className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg shadow-md transition duration-300 ease-in-out transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
-              disabled={!username || !messageInput.trim()}
+              disabled={!usernameSet || !messageInput.trim()}
             >
               Send
             </button>
           </div>
         </form>
       </div>
-
-      {/* Tailwind CSS Script - IMPORTANT: For local development, include this in public/index.html head */}
-      {/* For Canvas environment, Tailwind is usually pre-configured or loaded globally. */}
-      {/* <script src="https://cdn.tailwindcss.com"></script> */}
     </div>
   );
 };
