@@ -6,4 +6,3 @@ gunicorn
 python-engineio
 python-socketio
 gevent 
-geventwebsocket
