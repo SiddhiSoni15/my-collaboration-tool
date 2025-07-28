@@ -3,7 +3,7 @@ import { io } from 'socket.io-client';
 
 // The URL of your Python Flask-SocketIO backend
 // Make sure this matches the host and port your backend is running on.
-const SOCKET_SERVER_URL = 'http://localhost:5000';
+const SOCKET_SERVER_URL = 'https://my-collaboration-tool.onrender.com';
 
 // Main App component
 const App = () => {
