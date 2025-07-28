@@ -1,0 +1,21 @@
+# realtime-collaboration-tool/render.yaml
+services:
+  - type: web
+    name: realtime-chat-backend
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --bind 0.0.0.0:$PORT --worker-class geventwebsocket.gunicorn.workers.GeventWebSocketWorker --workers 1 app:app
+    envVars:
+      - key: DATABASE_URL
+        # Value will be set manually in Render dashboard or linked from a Render PostgreSQL instance
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true # Render can generate a random secret key for you
+    healthCheckPath: /
+    # You might need to adjust the port if Render's default is not 10000
+    # port: 10000 # Uncomment if you explicitly set this in Dockerfile/app.py
+
+# If you want to use Render's managed PostgreSQL directly (instead of ElephantSQL/Neon)
+# - type: pserv
+#   name: chat-database
+#   plan: free # Note: Render's free PostgreSQL tier has an expiry (e.g., 90 days)

@@ -1,0 +1,24 @@
+# .gitignore (in project root)
+
+# Python backend specific ignores
+/backend/__pycache__/
+/backend/*.pyc
+/backend/*.pyo
+/backend/.env
+/backend/serviceAccountKey.json # IMPORTANT: Keep your Firebase key out of Git!
+/backend/chat_messages.db # SQLite database file
+
+# Node/React frontend specific ignores
+/frontend/node_modules/
+/frontend/dist/ # Built frontend files (Vite output)
+/frontend/build/ # Built frontend files (Create React App output)
+/frontend/.env # Frontend environment variables
+/frontend/.vite/ # Vite cache
+
+# General ignores
+.DS_Store
+.env
+.vscode/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
