@@ -1,92 +1,105 @@
 # Import necessary libraries
-from flask import Flask, render_template, request
+from flask import Flask, request
 from flask_socketio import SocketIO, emit
-import sqlite3
+from sqlalchemy import create_engine, text, inspect
+from sqlalchemy.exc import OperationalError
 import datetime
 import json
 import os
-
-# Define the path for the SQLite database file
-DATABASE_FILE = 'chat_messages.db'
+import time
 
 # Initialize Flask app
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'your_strong_secret_key_for_sqlite_app' # Replace with a strong secret key
-socketio = SocketIO(app, cors_allowed_origins="*", message_queue=None)
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your_default_secret_key') # Use env var for secret key
 
-# --- SQLite Database Initialization ---
-def init_db():
-    """
-    Initializes the SQLite database: creates the table if it doesn't exist.
-    """
-    conn = None
+# --- PostgreSQL Database Configuration ---
+DATABASE_URL = os.environ.get('DATABASE_URL')
+
+db_engine = None
+if DATABASE_URL:
     try:
-        conn = sqlite3.connect(DATABASE_FILE)
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user TEXT NOT NULL,
-                text TEXT NOT NULL,
-                timestamp TEXT NOT NULL
-            )
-        ''')
-        conn.commit()
-        print(f"SQLite database '{DATABASE_FILE}' initialized successfully.")
-    except sqlite3.Error as e:
-        print(f"Error initializing SQLite database: {e}")
-    finally:
-        if conn:
-            conn.close()
+        if DATABASE_URL.startswith("postgres://"):
+            DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+        db_engine = create_engine(DATABASE_URL)
+        print("PostgreSQL engine created.")
+    except Exception as e:
+        print(f"Error creating SQLAlchemy engine: {e}")
+        db_engine = None
+else:
+    print("Database URL not provided, database engine not initialized.")
 
-# Call database initialization when the app starts
+# --- Database Initialization Function ---
+def init_db():
+    if not db_engine:
+        print("Database engine not available, skipping DB initialization.")
+        return
+
+    max_retries = 5
+    retry_delay = 5 # seconds
+    for i in range(max_retries):
+        try:
+            with db_engine.connect() as connection:
+                inspector = inspect(connection)
+                if not inspector.has_table("messages"):
+                    connection.execute(text('''
+                        CREATE TABLE messages (
+                            id SERIAL PRIMARY KEY,
+                            user_name VARCHAR(255) NOT NULL,
+                            text_content TEXT NOT NULL,
+                            timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                        )
+                    '''))
+                    connection.commit()
+                    print("PostgreSQL 'messages' table created successfully.")
+                else:
+                    print("PostgreSQL 'messages' table already exists.")
+                return
+        except OperationalError as e:
+            print(f"Database connection failed (Attempt {i+1}/{max_retries}): {e}")
+            if i < max_retries - 1:
+                print(f"Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+            else:
+                print("Max retries reached. Could not connect to database.")
+        except Exception as e:
+            print(f"An unexpected error occurred during DB initialization: {e}")
+            return
+
 with app.app_context():
     init_db()
 
-# --- Helper function to get a database connection ---
-def get_db_connection():
-    """Returns a new SQLite database connection."""
-    conn = sqlite3.connect(DATABASE_FILE)
-    conn.row_factory = sqlite3.Row # This allows accessing columns by name
-    return conn
+socketio = SocketIO(app, cors_allowed_origins="*", message_queue=None)
 
 # --- SocketIO Event Handlers ---
 
 @socketio.on('connect')
 def handle_connect():
-    """Handles new client connections."""
     print('Client connected:', request.sid)
-    # Send historical messages to the newly connected client
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        # Fetch last 100 messages, ordered by timestamp (oldest first)
-        cursor.execute("SELECT user, text, timestamp FROM messages ORDER BY timestamp ASC LIMIT 100")
-        rows = cursor.fetchall()
-        messages = [dict(row) for row in rows] # Convert rows to dictionaries
-        emit('initial_messages', {'messages': messages}, room=request.sid)
-    except sqlite3.Error as e:
-        print(f"Error fetching initial messages from SQLite: {e}")
-    finally:
-        if conn:
-            conn.close()
+    if db_engine:
+        try:
+            with db_engine.connect() as connection:
+                result = connection.execute(text("SELECT user_name, text_content, timestamp FROM messages ORDER BY timestamp ASC LIMIT 100"))
+                messages = []
+                for row in result:
+                    msg_data = {
+                        'user': row.user_name,
+                        'text': row.text_content,
+                        'timestamp': row.timestamp.isoformat()
+                    }
+                    messages.append(msg_data)
+                emit('initial_messages', {'messages': messages}, room=request.sid)
+        except Exception as e:
+            print(f"Error fetching initial messages from PostgreSQL: {e}")
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    """Handles client disconnections."""
     print('Client disconnected:', request.sid)
 
 @socketio.on('message')
 def handle_message(data):
-    """
-    Handles incoming messages from clients.
-    Saves the message to SQLite and broadcasts it to all connected clients.
-    """
     print('Received message:', data)
     user = data.get('user', 'Anonymous')
     text = data.get('text', '')
-    # Use ISO format for timestamp as it's easily parseable in JavaScript
     timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
     if not text.strip():
@@ -99,32 +112,58 @@ def handle_message(data):
         'timestamp': timestamp
     }
 
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        # Insert message into SQLite
-        cursor.execute("INSERT INTO messages (user, text, timestamp) VALUES (?, ?, ?)",
-                       (user, text, timestamp))
-        conn.commit()
-        print(f"Message saved to SQLite: {message_data}")
+    if db_engine:
+        try:
+            with db_engine.connect() as connection:
+                connection.execute(
+                    text("INSERT INTO messages (user_name, text_content, timestamp) VALUES (:user, :text, :timestamp)"),
+                    {'user': user, 'text': text, 'timestamp': datetime.datetime.fromisoformat(timestamp)}
+                )
+                connection.commit()
+                print(f"Message saved to PostgreSQL: {message_data}")
 
-        # Emit the message to all connected clients in real-time
+            emit('new_message', message_data, broadcast=True)
+        except Exception as e:
+            print(f"Error saving message to PostgreSQL or broadcasting: {e}")
+    else:
+        print("Database engine not initialized, message not saved or broadcasted.")
         emit('new_message', message_data, broadcast=True)
-    except sqlite3.Error as e:
-        print(f"Error saving message to SQLite or broadcasting: {e}")
-    finally:
-        if conn:
-            conn.close()
+
+@socketio.on('clear_chat')
+def handle_clear_chat():
+    """
+    Handles request to clear all chat messages from the database.
+    Only allows clearing if the database engine is initialized.
+    """
+    print('Received request to clear chat.')
+    if db_engine:
+        try:
+            with db_engine.connect() as connection:
+                connection.execute(text("DELETE FROM messages"))
+                connection.commit()
+                print("All messages deleted from PostgreSQL.")
+                # Emit an event to all clients to clear their chat history
+                emit('chat_cleared', {}, broadcast=True)
+        except Exception as e:
+            print(f"Error clearing messages from PostgreSQL: {e}")
+            # Optionally, emit an error back to the client that requested the clear
+            emit('clear_chat_error', {'message': 'Failed to clear chat history.'}, room=request.sid)
+    else:
+        print("Database engine not initialized, cannot clear chat.")
+        emit('clear_chat_error', {'message': 'Database not available.'}, room=request.sid)
+
 
 # Basic route for testing (optional, can be removed in production)
 @app.route('/')
 def index():
-    return "<h1>Real-time Collaboration Backend (SQLite) is Running!</h1><p>Connect via WebSocket.</p>"
+    return "<h1>Real-time Collaboration Backend (PostgreSQL) is Running!</h1><p>Connect via WebSocket.</p>"
 
 # Run the Flask app with SocketIO
 if __name__ == '__main__':
-    # Use '0.0.0.0' to make the server accessible from other machines in a network
-    # For local development, '127.0.0.1' or 'localhost' is often sufficient
-    print("Starting Flask-SocketIO server with SQLite backend...")
+    print("Starting Flask-SocketIO server with PostgreSQL backend...")
     socketio.run(app, host='0.0.0.0', port=5000, debug=True, allow_unsafe_werkzeug=True)
+
+
+# 'postgresql://neondb_owner:npg_hsn7jkKAq9pR@ep-mute-paper-a1ugypzg-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require'
+#  https://my-collaboration-tool.onrender.com
+#  my-collaboration-tool-lmyduduuc-siddhis-projects-a9229ec0.vercel.app
