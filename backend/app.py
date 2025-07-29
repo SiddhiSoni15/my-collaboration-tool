@@ -74,7 +74,7 @@ socketio = SocketIO(app, cors_allowed_origins="*", message_queue=None)
 
 @socketio.on('connect')
 def handle_connect():
-    print('Client connected:', request.sid)
+    print(f'Client connected: {request.sid}')
     if db_engine:
         try:
             with db_engine.connect() as connection:
@@ -88,16 +88,17 @@ def handle_connect():
                     }
                     messages.append(msg_data)
                 emit('initial_messages', {'messages': messages}, room=request.sid)
+                print(f"Emitted {len(messages)} initial messages to {request.sid}")
         except Exception as e:
             print(f"Error fetching initial messages from PostgreSQL: {e}")
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    print('Client disconnected:', request.sid)
+    print(f'Client disconnected: {request.sid}')
 
 @socketio.on('message')
 def handle_message(data):
-    print('Received message:', data)
+    print(f'Received message from {request.sid}: {data}')
     user = data.get('user', 'Anonymous')
     text = data.get('text', '')
     timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -115,38 +116,35 @@ def handle_message(data):
     if db_engine:
         try:
             with db_engine.connect() as connection:
-                connection.execute(
-                    text("INSERT INTO messages (user_name, text_content, timestamp) VALUES (:user, :text, :timestamp)"),
-                    {'user': user, 'text': text, 'timestamp': datetime.datetime.fromisoformat(timestamp)}
-                )
-                connection.commit()
+                # Use a transaction to ensure atomicity
+                with connection.begin(): # This automatically commits or rolls back
+                    connection.execute(
+                        text("INSERT INTO messages (user_name, text_content, timestamp) VALUES (:user, :text, :timestamp)"),
+                        {'user': user, 'text': text, 'timestamp': datetime.datetime.fromisoformat(timestamp)}
+                    )
                 print(f"Message saved to PostgreSQL: {message_data}")
 
             emit('new_message', message_data, broadcast=True)
+            print(f"Emitted new_message to all clients: {message_data}")
         except Exception as e:
             print(f"Error saving message to PostgreSQL or broadcasting: {e}")
     else:
         print("Database engine not initialized, message not saved or broadcasted.")
-        emit('new_message', message_data, broadcast=True)
+        emit('new_message', message_data, broadcast=True) # Still emit for local testing even if DB fails
 
 @socketio.on('clear_chat')
 def handle_clear_chat():
-    """
-    Handles request to clear all chat messages from the database.
-    Only allows clearing if the database engine is initialized.
-    """
-    print('Received request to clear chat.')
+    print(f'Received request to clear chat from {request.sid}.')
     if db_engine:
         try:
             with db_engine.connect() as connection:
-                connection.execute(text("DELETE FROM messages"))
-                connection.commit()
+                with connection.begin(): # Use a transaction
+                    connection.execute(text("DELETE FROM messages"))
                 print("All messages deleted from PostgreSQL.")
-                # Emit an event to all clients to clear their chat history
                 emit('chat_cleared', {}, broadcast=True)
+                print("Emitted chat_cleared to all clients.")
         except Exception as e:
             print(f"Error clearing messages from PostgreSQL: {e}")
-            # Optionally, emit an error back to the client that requested the clear
             emit('clear_chat_error', {'message': 'Failed to clear chat history.'}, room=request.sid)
     else:
         print("Database engine not initialized, cannot clear chat.")
@@ -162,7 +160,6 @@ def index():
 if __name__ == '__main__':
     print("Starting Flask-SocketIO server with PostgreSQL backend...")
     socketio.run(app, host='0.0.0.0', port=5000, debug=True, allow_unsafe_werkzeug=True)
-
 
 # 'postgresql://neondb_owner:npg_hsn7jkKAq9pR@ep-mute-paper-a1ugypzg-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require'
 #  https://my-collaboration-tool.onrender.com

@@ -3,7 +3,7 @@ import { io } from 'socket.io-client';
 import EmojiPicker from 'emoji-picker-react'; // Import the EmojiPicker
 
 // The URL of your Python Flask-SocketIO backend
-// IMPORTANT: Replace this with your deployed Render Service URL
+// IMPORTANT: Replace this https://my-collaboration-tool.onrender.com with your deployed Render Service URL
 const SOCKET_SERVER_URL = 'https://my-collaboration-tool.onrender.com'; // e.g., 'https://realtime-chat-backend.onrender.com'
 
 // Main App component
