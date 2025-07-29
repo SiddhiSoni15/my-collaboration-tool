@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
+import EmojiPicker from 'emoji-picker-react'; // Import the EmojiPicker
 
 // The URL of your Python Flask-SocketIO backend
 // IMPORTANT: Replace this with your deployed Render Service URL
@@ -17,10 +18,16 @@ const App = () => {
   const [tempUsername, setTempUsername] = useState('');
   // State to track if the username has been confirmed/set
   const [usernameSet, setUsernameSet] = useState(false);
+  // State to control the visibility of the confirmation modal
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+  // NEW: State to control the visibility of the emoji picker
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   // Ref to keep track of the socket connection
   const socketRef = useRef(null);
   // Ref for auto-scrolling the chat window to the bottom
   const messagesEndRef = useRef(null);
+  // Ref for the message input to focus it after emoji selection
+  const messageInputRef = useRef(null);
 
   // useEffect hook to handle Socket.IO connection and events
   useEffect(() => {
@@ -38,7 +45,7 @@ const App = () => {
     // Event listener for successful connection
     socketRef.current.on('connect', () => {
       console.log('Connected to Socket.IO server!');
-      // Emit a user_joined event with the set username
+      // Emit a user_joined event with the set username (optional, for backend tracking)
       socketRef.current.emit('user_joined', { username: username });
     });
 
@@ -61,6 +68,20 @@ const App = () => {
       setMessages((prevMessages) => [...prevMessages, message]);
       scrollToBottom();
     });
+
+    // Event listener for chat cleared event from backend
+    socketRef.current.on('chat_cleared', () => {
+      console.log('Chat history cleared by server.');
+      setMessages([]); // Clear local messages state
+      alert('Chat history has been cleared by another user.'); // Notify user
+    });
+
+    // Event listener for clear chat errors
+    socketRef.current.on('clear_chat_error', (data) => {
+      console.error('Error clearing chat:', data.message);
+      alert(`Error clearing chat: ${data.message}`);
+    });
+
 
     // Cleanup function: disconnect the socket when the component unmounts
     return () => {
@@ -102,6 +123,7 @@ const App = () => {
       // Emit the 'message' event to the server
       socketRef.current.emit('message', messageData);
       setMessageInput(''); // Clear the input field after sending
+      setShowEmojiPicker(false); // Close emoji picker after sending message
     } else if (!messageInput.trim()) {
       alert('Message cannot be empty.');
     }
@@ -121,12 +143,48 @@ const App = () => {
     }
   };
 
+  // NEW: Function to handle emoji selection
+  const onEmojiClick = (emojiObject, event) => {
+    setMessageInput((prevMsgInput) => prevMsgInput + emojiObject.emoji);
+    setShowEmojiPicker(false); // Close the picker after selecting an emoji
+    messageInputRef.current.focus(); // Focus back on the input field
+  };
+
+
+  // Function to initiate clear chat confirmation
+  const initiateClearChat = () => {
+    setShowClearConfirm(true);
+  };
+
+  // Function to confirm and clear chat
+  const confirmClearChat = () => {
+    if (socketRef.current) {
+      socketRef.current.emit('clear_chat'); // Emit the event to the backend
+    }
+    setShowClearConfirm(false); // Close the modal
+  };
+
+  // Function to cancel clear chat
+  const cancelClearChat = () => {
+    setShowClearConfirm(false);
+  };
+
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-100 to-purple-100 flex items-center justify-center p-4 font-inter">
       <div className="bg-white rounded-xl shadow-2xl overflow-hidden w-full max-w-lg md:max-w-xl lg:max-w-2xl flex flex-col h-[80vh]">
         {/* Header */}
-        <div className="bg-blue-600 text-white p-4 text-center text-2xl font-bold rounded-t-xl">
-          Real-time Collaboration Chat
+        <div className="bg-blue-600 text-white p-4 text-center text-2xl font-bold rounded-t-xl flex justify-between items-center">
+          <span className="flex-grow text-center">Real-time Collaboration Chat</span>
+          {usernameSet && (
+            <button
+              onClick={initiateClearChat}
+              className="bg-red-500 hover:bg-red-600 text-white text-sm font-semibold py-2 px-4 rounded-lg shadow-md transition duration-300 ease-in-out transform hover:scale-105"
+              title="Clear all messages for everyone"
+            >
+              Clear Chat
+            </button>
+          )}
         </div>
 
         {/* Username Input / Display */}
@@ -165,7 +223,7 @@ const App = () => {
           ) : (
             messages.map((msg, index) => (
               <div
-                key={index} // Using index as key is okay for static lists, but for dynamic lists with deletions/reordering, a unique ID from the backend is better.
+                key={index}
                 className={`flex items-start mb-4 ${msg.user === username ? 'justify-end' : 'justify-start'}`}
               >
                 <div
@@ -191,15 +249,27 @@ const App = () => {
         </div>
 
         {/* Message Input Form */}
-        <form onSubmit={sendMessage} className="p-4 border-t border-gray-200 bg-gray-50">
+        <form onSubmit={sendMessage} className="p-4 border-t border-gray-200 bg-gray-50 relative"> {/* Added relative for positioning */}
           <div className="flex space-x-3">
+            {/* Emoji Picker Button */}
+            <button
+              type="button" // Important: type="button" to prevent form submission
+              onClick={() => setShowEmojiPicker((prev) => !prev)}
+              className="p-3 bg-gray-200 text-xl rounded-lg hover:bg-gray-300 transition duration-200 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={!usernameSet}
+              title="Toggle Emoji Picker"
+            >
+              😊
+            </button>
+
             <input
               type="text"
               value={messageInput}
               onChange={(e) => setMessageInput(e.target.value)}
               placeholder={usernameSet ? "Type your message..." : "Set username first to chat..."}
               className="flex-1 p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition duration-200 ease-in-out"
-              disabled={!usernameSet} // Disable chat input until username is set
+              disabled={!usernameSet}
+              ref={messageInputRef} // Assign ref to input
             />
             <button
               type="submit"
@@ -209,8 +279,39 @@ const App = () => {
               Send
             </button>
           </div>
+
+          {/* Emoji Picker Component */}
+          {showEmojiPicker && (
+            <div className="absolute bottom-full left-0 mb-2 z-10 w-full max-h-80 overflow-y-auto"> {/* Positioning for picker */}
+              <EmojiPicker onEmojiClick={onEmojiClick} height={350} width="100%" />
+            </div>
+          )}
         </form>
       </div>
+
+      {/* Clear Chat Confirmation Modal */}
+      {showClearConfirm && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-xl p-6 max-w-sm w-full">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Confirm Clear Chat</h3>
+            <p className="text-gray-700 mb-6">Are you sure you want to clear ALL chat messages for EVERYONE? This action cannot be undone.</p>
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={cancelClearChat}
+                className="px-4 py-2 bg-gray-300 text-gray-800 rounded-md hover:bg-gray-400 transition duration-200"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmClearChat}
+                className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition duration-200"
+              >
+                Clear All
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
